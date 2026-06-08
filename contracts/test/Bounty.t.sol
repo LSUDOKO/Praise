@@ -6,11 +6,13 @@ import "../src/MockUSDC.sol";
 import "../src/Bounty.sol";
 import "../src/BountyFactory.sol";
 import "../src/AgentDelegation.sol";
+import "../src/DisputeResolver.sol";
 
 contract BountyTest is Test {
     MockUSDC usdc;
     BountyFactory factory;
     AgentDelegation agentDelegation;
+    DisputeResolver disputeResolver;
 
     address creator = makeAddr("creator");
     address contributor = makeAddr("contributor");
@@ -28,7 +30,11 @@ contract BountyTest is Test {
         // Deploy contracts
         usdc = new MockUSDC();
         agentDelegation = new AgentDelegation(trustedSigner, SCORE_THRESHOLD);
+        disputeResolver = new DisputeResolver();
         factory = new BountyFactory();
+
+        // Wire DisputeResolver into BountyFactory
+        factory.setDisputeResolver(address(disputeResolver));
 
         // Mint USDC to creator
         usdc.mint(creator, 1000e6);
@@ -260,6 +266,59 @@ contract BountyTest is Test {
         vm.prank(creator);
         vm.expectRevert(Bounty.AlreadyReleased.selector);
         bounty.reclaim();
+    }
+
+    // ── Dispute Resolver Integration ─────────────────────────────────────
+
+    function test_disputeResolver_canRaiseAndResolveDispute() public {
+        Bounty bounty = _createAndFundBounty();
+
+        // DisputeResolver.createDispute() internally calls bounty.raiseDispute()
+        // With our fix, the Bounty allows disputeResolver to call raiseDispute
+        vm.prank(creator);
+        disputeResolver.createDispute(
+            address(bounty),
+            "PR does not resolve the issue correctly",
+            "ipfs://QmTest123"
+        );
+
+        assertTrue(bounty.disputed(), "Bounty should be disputed");
+        assertFalse(bounty.isReleasable(), "Should not be releasable while disputed");
+        assertTrue(disputeResolver.hasOpenDispute(address(bounty)), "Resolver should show open dispute");
+
+        // Resolve via the DisputeResolver as an arbitrator.
+        // The DisputeResolver was deployed by this test contract,
+        // so address(this) is the initial arbitrator.
+        // DisputeResolver.resolveDispute() internally calls:
+        //   bounty.resolveDispute(contributorWins)
+        // With our fix, the Bounty's onlyOwnerOrResolver modifier
+        // allows the disputeResolver address to call resolveDispute.
+        disputeResolver.resolveDispute(address(bounty), false); // Creator wins
+
+        assertTrue(bounty.reclaimed(), "Bounty should be reclaimed");
+        assertFalse(bounty.disputed(), "Dispute should be resolved");
+        assertEq(usdc.balanceOf(creator), 1000e6, "Creator should get funds back");
+    }
+
+    function test_disputeResolver_resolveContributorWins() public {
+        Bounty bounty = _createAndFundBounty();
+
+        // Raise dispute via DisputeResolver as creator
+        vm.prank(creator);
+        disputeResolver.createDispute(
+            address(bounty),
+            "Code has security issues",
+            "ipfs://QmSecurity"
+        );
+
+        assertTrue(disputeResolver.hasOpenDispute(address(bounty)), "Open dispute should exist");
+
+        // Try to resolve as arbitrator with contributorWins=true
+        // This should revert with ZeroAddress because contributor is address(0)
+        // and the DisputeResolver resolves by calling bounty.resolveDispute(true)
+        // which transfers to contributor (must be non-zero).
+        vm.expectRevert(Bounty.ZeroAddress.selector);
+        disputeResolver.resolveDispute(address(bounty), true);
     }
 
     // ── Edge Cases ───────────────────────────────────────────────────────

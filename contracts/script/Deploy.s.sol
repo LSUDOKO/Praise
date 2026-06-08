@@ -64,6 +64,11 @@ contract Deploy is Script {
         DisputeResolver disputeResolver = new DisputeResolver();
         console.log("DisputeResolver deployed at:", address(disputeResolver));
 
+        // Wire the Dispute Resolver into the BountyFactory so new bounties
+        // allow it to raise and resolve disputes.
+        factory.setDisputeResolver(address(disputeResolver));
+        console.log("DisputeResolver wired into BountyFactory:", address(disputeResolver));
+
         // Deploy Smart Account integration
         SmartAccountAdapter smartAccountAdapter = new SmartAccountAdapter(
             metaMaskFactory != address(0) ? metaMaskFactory : address(factory),

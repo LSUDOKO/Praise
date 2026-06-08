@@ -37,12 +37,14 @@ export const BOUNTY_FACTORY_ABI = [
   // State-changing
   "function createBounty(address agent, address token, uint256 contestPeriod, string repoName, uint256 issueNumber) returns (uint256 bountyId, address bountyAddress)",
   "function setPaused(bool _paused)",
+  "function setDisputeResolver(address _resolver)",
 
   // Views
   "function bountyCount() view returns (uint256)",
   "function bounties(uint256) view returns (address)",
   "function bountyIds(address) view returns (uint256)",
   "function paused() view returns (bool)",
+  "function disputeResolver() view returns (address)",
   "function getBounty(uint256 _bountyId) view returns (address)",
   "function getBountyByIssue(string repoName, uint256 issueNumber) view returns (uint256)",
   "function getBountyId(address bountyAddress) view returns (uint256)",
@@ -134,14 +136,14 @@ export const ERC20_ABI = [
   "event Approval(address indexed owner, address indexed spender, uint256 value)",
 ] as const;
 
-// Contract addresses on Arbitrum Sepolia (LIVE)
+// Contract addresses on Arbitrum Sepolia (LIVE — redeployed with dispute resolver fix)
 export const CONTRACT_ADDRESSES = {
   usdc: "0x75Cc4fDf07DA32FD5A00f8B922e7d51DDA4e50b9" as const,
-  bountyFactory: "0x2cf9b3bC314504E4CA30eED0C527256Ea76fddc5" as const,
-  agentDelegation: "0x9e5B19E900adCCd23aDc74867b056Dd6f1d9aA59" as const,
-  bountyRegistry: "0x76090E4943910F41290Aa4eC0c63B7F3aB6b6241" as const,
-  disputeResolver: "0x05123409689B7BA30Ebb28d750d5250f242eA99E" as const,
-  smartAccountAdapter: "0x78a5258dB533F8Ac986668DfFEB05019819eeC79" as const,
+  bountyFactory: "0x4d8bC026ceD696577aD57f1bA4eC2AF552b13667" as const,
+  agentDelegation: "0x1abA83786Cf074eEFd2b09a81b88E06ee0F628e9" as const,
+  bountyRegistry: "0x875a92Cac246703ed77282077f2d43012249e42c" as const,
+  disputeResolver: "0xb6334e4bc1C67c8641D9F0845a9d27EA700037D5" as const,
+  smartAccountAdapter: "0x02c856d62c8C262dCE31a005fEFaC3df748c68b7" as const,
   chainId: 421614,
   rpcUrl: "https://sepolia-rollup.arbitrum.io/rpc",
 } as const;

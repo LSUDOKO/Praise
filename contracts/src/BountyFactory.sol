@@ -26,6 +26,9 @@ contract BountyFactory is Ownable {
     
     // Pause state
     bool public paused;
+    
+    // Dispute Resolver address (optional — 0 = none configured)
+    address public disputeResolver;
 
     // ── Events ───────────────────────────────────────────────────────────
 
@@ -41,11 +44,13 @@ contract BountyFactory is Ownable {
     );
     
     event FactoryPausedEvent(bool isPaused);
+    event DisputeResolverUpdated(address indexed newResolver);
 
     // ── Errors ───────────────────────────────────────────────────────────
 
     error FactoryIsPaused();
     error ZeroAddress();
+    error DisputeResolverNotSet();
 
     // ── Constructor ──────────────────────────────────────────────────────
 
@@ -86,7 +91,8 @@ contract BountyFactory is Ownable {
             agent,
             token,
             contestPeriod,
-            bountyId
+            bountyId,
+            disputeResolver  // may be address(0) if not configured
         );
 
         bountyAddress = address(bounty);
@@ -108,6 +114,16 @@ contract BountyFactory is Ownable {
             repoName,
             issueNumber
         );
+    }
+
+    /**
+     * @notice Set the Dispute Resolver contract address.
+     * All new bounty contracts will allow this address to raise/resolve disputes.
+     */
+    function setDisputeResolver(address _resolver) external onlyOwner {
+        if (_resolver == address(0)) revert ZeroAddress();
+        disputeResolver = _resolver;
+        emit DisputeResolverUpdated(_resolver);
     }
 
     /**

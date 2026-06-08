@@ -21,12 +21,10 @@ import "../src/SmartAccountAdapter.sol";
  * The deployer private key (the trusted signer) signs the Venice AI attestation.
  */
 contract EndToEndTest is Test {
-    // ── Existing deployed addresses (Arbitrum Sepolia) ───────────────────
-    address constant BountyFactoryAddr = 0x2cf9b3bC314504E4CA30eED0C527256Ea76fddc5;
-    address constant BountyRegistryAddr = 0x76090E4943910F41290Aa4eC0c63B7F3aB6b6241;
-    address constant AgentDelegationAddr = 0x9e5B19E900adCCd23aDc74867b056Dd6f1d9aA59;
-    address constant DisputeResolverAddr = 0x05123409689B7BA30Ebb28d750d5250f242eA99E;
-    address constant SmartAccountAdapterAddr = 0x78a5258dB533F8Ac986668DfFEB05019819eeC79;
+    // ── Deployed addresses (Arbitrum Sepolia) ─────────────────────────
+    address constant BountyRegistryAddr = 0x875a92Cac246703ed77282077f2d43012249e42c;
+    address constant AgentDelegationAddr = 0x1abA83786Cf074eEFd2b09a81b88E06ee0F628e9;
+    address constant SmartAccountAdapterAddr = 0x02c856d62c8C262dCE31a005fEFaC3df748c68b7;
 
     // Deployer = trusted signer (from .env PRIVATE_KEY)
     uint256 constant DeployerPK = 0x62a6197e8486247d144922462f90dd9d93aac058176415725ce1c6d39f08ab6a;
@@ -42,11 +40,11 @@ contract EndToEndTest is Test {
 
     // ── Contract instances ──────────────────────────────────────────────
 
-    BountyFactory factory;
-    BountyRegistry registry;
-    AgentDelegation agentDelegation;
-    DisputeResolver disputeResolver;
-    SmartAccountAdapter adapter;
+    BountyFactory factory;        // Freshly deployed (with dispute resolver fix)
+    BountyRegistry registry;      // Deployed on-chain
+    AgentDelegation agentDelegation;  // Deployed on-chain
+    DisputeResolver disputeResolver;  // Freshly deployed
+    SmartAccountAdapter adapter;  // Deployed on-chain
     MockUSDC usdc;
 
     // ── Setup ───────────────────────────────────────────────────────────
@@ -56,11 +54,15 @@ contract EndToEndTest is Test {
         vm.createSelectFork("https://sepolia-rollup.arbitrum.io/rpc");
 
         // Wire up deployed contracts
-        factory = BountyFactory(BountyFactoryAddr);
         registry = BountyRegistry(BountyRegistryAddr);
         agentDelegation = AgentDelegation(AgentDelegationAddr);
-        disputeResolver = DisputeResolver(DisputeResolverAddr);
         adapter = SmartAccountAdapter(SmartAccountAdapterAddr);
+
+        // Deploy a NEW BountyFactory and DisputeResolver so that the
+        // dispute resolver fix (wired factory -> bounty) takes effect.
+        factory = new BountyFactory();
+        disputeResolver = new DisputeResolver();
+        factory.setDisputeResolver(address(disputeResolver));
 
         // Deploy MockUSDC fresh in the fork so we have full control
         usdc = new MockUSDC();
@@ -484,32 +486,40 @@ contract EndToEndTest is Test {
         console.log(unicode"✅ Permission grant and revoke test passed");
     }
 
-    // ── Test: Dispute lifecycle ─────────────────────────────────────────
+    // ── Test: Dispute lifecycle via DisputeResolver ──────────────────────
 
     function testDisputeLifecycle() public {
         (, address bountyAddress) = _createAndFundBounty(500);
         Bounty bounty = Bounty(bountyAddress);
 
-        // Raise a dispute directly on the Bounty as creator.
-        // Note: Bounty.raiseDispute() has onlyCreatorOrAgent modifier, so
-        // only the creator or agent (AgentDelegation) can raise a dispute.
+        // Raise a dispute via the DisputeResolver contract.
+        // DisputeResolver.createDispute() internally calls:
+        //   bounty.raiseDispute(reason)
+        // With our fix, the Bounty's onlyCreatorOrAgentOrResolver modifier
+        // allows the disputeResolver address to call raiseDispute.
         vm.prank(Deployer);
-        bounty.raiseDispute("The submission does not meet requirements");
+        disputeResolver.createDispute(
+            bountyAddress,
+            "The submission does not meet requirements",
+            "ipfs://QmTest123"
+        );
 
         assertTrue(bounty.disputed(), "Bounty should be disputed after dispute raised");
         assertFalse(bounty.isReleasable(), "Should not be releasable while disputed");
+        assertTrue(disputeResolver.hasOpenDispute(bountyAddress), "Resolver should have open dispute");
 
-        // Resolve the dispute by calling Bounty.resolveDispute() as owner (creator).
-        // resolveDispute(true) requires contributor to be non-zero (only set via release),
-        // so we resolve with contributorWins = false (creator gets funds back).
-        // This is a valid dispute outcome and tests the full dispute lifecycle.
-        vm.prank(Deployer);
-        bounty.resolveDispute(false); // Creator wins → funds returned
+        // Resolve the dispute via the DisputeResolver contract as an arbitrator.
+        // The DisputeResolver was deployed by this test contract so address(this)
+        // is the default arbitrator. DisputeResolver.resolveDispute() internally
+        // calls bounty.resolveDispute(contributorWins). With our fix, the Bounty's
+        // onlyOwnerOrResolver modifier allows the disputeResolver address to
+        // call resolveDispute.
+        disputeResolver.resolveDispute(bountyAddress, false); // Creator wins
 
         assertTrue(bounty.reclaimed(), "Bounty should be reclaimed after dispute resolution");
         assertFalse(bounty.disputed(), "Bounty should no longer be disputed");
         assertEq(usdc.balanceOf(Deployer), BOUNTY_AMOUNT * 10, "Creator should get funds back on dispute win");
 
-        console.log(unicode"✅ Dispute lifecycle test passed");
+        console.log(unicode"✅ Dispute lifecycle via DisputeResolver test passed");
     }
 }

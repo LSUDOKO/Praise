@@ -33,6 +33,7 @@ contract Bounty is ReentrancyGuard, Ownable {
     IERC20  public immutable token;
     uint256 public immutable contestPeriod; // seconds after deposit before creator can reclaim
     uint256 public immutable bountyId; // GitHub issue ID or similar
+    address public immutable disputeResolver; // DisputeResolver contract
     uint256 public depositTimestamp;
 
     bool public released;
@@ -60,6 +61,8 @@ contract Bounty is ReentrancyGuard, Ownable {
     error OnlyCreator();
     error OnlyAgent();
     error OnlyCreatorOrAgent();
+    error OnlyCreatorOrAgentOrResolver();
+    error OnlyOwnerOrResolver();
     error AlreadyReleased();
     error AlreadyReclaimed();
     error ContestPeriodNotOver();
@@ -89,6 +92,18 @@ contract Bounty is ReentrancyGuard, Ownable {
         _;
     }
 
+    modifier onlyCreatorOrAgentOrResolver() {
+        if (msg.sender != creator && msg.sender != agent && msg.sender != disputeResolver)
+            revert OnlyCreatorOrAgentOrResolver();
+        _;
+    }
+
+    modifier onlyOwnerOrResolver() {
+        if (msg.sender != owner() && msg.sender != disputeResolver)
+            revert OnlyOwnerOrResolver();
+        _;
+    }
+
     modifier notPaused() {
         if (paused || disputed) revert IsPaused();
         _;
@@ -101,7 +116,8 @@ contract Bounty is ReentrancyGuard, Ownable {
         address _agent,
         address _token,
         uint256 _contestPeriod,
-        uint256 _bountyId
+        uint256 _bountyId,
+        address _disputeResolver
     ) Ownable(_creator) {
         if (_creator == address(0) || _agent == address(0) || _token == address(0))
             revert ZeroAddress();
@@ -113,6 +129,7 @@ contract Bounty is ReentrancyGuard, Ownable {
         token = IERC20(_token);
         contestPeriod = _contestPeriod;
         bountyId = _bountyId;
+        disputeResolver = _disputeResolver;
     }
 
     // ── External Functions ───────────────────────────────────────────────
@@ -181,7 +198,7 @@ contract Bounty is ReentrancyGuard, Ownable {
      * @notice Creator or agent raises a dispute for arbitration.
      * While disputed, no releases are allowed.
      */
-    function raiseDispute(string calldata reason) external onlyCreatorOrAgent nonReentrant {
+    function raiseDispute(string calldata reason) external onlyCreatorOrAgentOrResolver nonReentrant {
         if (released || reclaimed) revert AlreadyReleased();
         
         disputed = true;
@@ -192,7 +209,7 @@ contract Bounty is ReentrancyGuard, Ownable {
      * @notice Owner (factory/admin) resolves a dispute.
      * Can either award to contributor or return to creator.
      */
-    function resolveDispute(bool contributorWins) external onlyOwner nonReentrant {
+    function resolveDispute(bool contributorWins) external onlyOwnerOrResolver nonReentrant {
         if (released || reclaimed) revert AlreadyReleased();
         
         uint256 currentBalance = token.balanceOf(address(this));
