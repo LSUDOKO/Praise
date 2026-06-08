@@ -21,10 +21,22 @@ export function getReadProvider(): JsonRpcProvider {
 }
 
 export async function getSignerProvider(): Promise<BrowserProvider> {
-  if (typeof window === "undefined" || !window.ethereum) {
+  if (typeof window === "undefined" || !(window as any).ethereum) {
     throw new Error("MetaMask or Web3Auth wallet not available");
   }
-  return new BrowserProvider(window.ethereum as any);
+  return new BrowserProvider((window as any).ethereum);
+}
+
+/**
+ * Resolve a signer from a passed value.
+ * - If the value already has getAddress (Wallet or JsonRpcSigner), use it directly
+ * - If the value is a Provider, get the signer from it
+ * - If undefined, create a BrowserProvider from window.ethereum
+ */
+export async function resolveSigner(signer?: any): Promise<any> {
+  if (signer && typeof signer.getAddress === "function") return signer;
+  const p = signer || await getSignerProvider();
+  return p.getSigner();
 }
 
 // ── Contract Instances ───────────────────────────────────────────────────
@@ -73,8 +85,7 @@ export async function approveUSDC(
   amount: string,
   signer?: any
 ): Promise<string> {
-  const provider = signer || await getSignerProvider();
-  const signerObj = await provider.getSigner();
+  const signerObj = await resolveSigner(signer);
   const contract = getUSDCContract(signerObj);
   const decimals = await contract.decimals();
   const parsedAmount = parseUnits(amount, decimals);
@@ -107,8 +118,7 @@ export async function createBountyOnChain(
   issueNumber: number,
   signer?: any
 ): Promise<CreateBountyResult> {
-  const provider = signer || await getSignerProvider();
-  const signerObj = await provider.getSigner();
+  const signerObj = await resolveSigner(signer);
   const contract = getFactoryContract(signerObj);
   const usdcAddress = CONTRACT_ADDRESSES.usdc;
 
@@ -278,8 +288,7 @@ export async function depositToBounty(
   amount: string,
   signer?: any
 ): Promise<string> {
-  const provider = signer || await getSignerProvider();
-  const signerObj = await provider.getSigner();
+  const signerObj = await resolveSigner(signer);
   const contract = getBountyContract(bountyAddress, signerObj);
 
   const usdcContract = getUSDCContract(signerObj);
@@ -307,8 +316,7 @@ export async function agentReleaseBounty(
   signature: string,
   signer?: any
 ): Promise<string> {
-  const provider = signer || (await getSignerProvider());
-  const signerObj = await provider.getSigner();
+  const signerObj = await resolveSigner(signer);
   const contract = getAgentDelegationContract(signerObj);
 
   const tx = await contract.verifyAndRelease(

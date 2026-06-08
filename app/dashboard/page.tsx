@@ -15,7 +15,7 @@ import { useRouter } from 'next/navigation';
 
 export default function Dashboard() {
   const router = useRouter();
-  const { userAccount, isAuthenticated, isInitialized, login, logout, userEmail } = useWeb3Auth();
+  const { userAccount, isAuthenticated, isInitialized, login, logout, userEmail, signer } = useWeb3Auth();
   const [balance, setBalance] = useState<string>('0');
   const [smartAccount, setSmartAccount] = useState<string | null>(null);
   const [isSmartAccountDeployed, setIsSmartAccountDeployed] = useState(false);
@@ -58,13 +58,12 @@ export default function Dashboard() {
     if (!userAccount) return;
     setLoading(true);
     try {
-      const accountAddress = await getOrCreateSmartAccount(userAccount);
+      const accountAddress = await getOrCreateSmartAccount(userAccount, signer || undefined);
       setSmartAccount(accountAddress);
 
       const isSA = await isSmartAccount(accountAddress);
       setIsSmartAccountDeployed(isSA);
 
-      // Fetch balance of Smart Account
       const saBalance = await getUSDCBalance(accountAddress);
       console.log('Smart Account balance:', saBalance);
     } catch (error) {

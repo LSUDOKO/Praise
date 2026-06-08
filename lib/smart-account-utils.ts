@@ -1,6 +1,6 @@
 "use client";
 
-import { BrowserProvider, Contract } from "ethers";
+import { Wallet, JsonRpcProvider, Contract } from "ethers";
 import {
   getUSDCBalance,
   approveUSDC,
@@ -35,19 +35,22 @@ export {
 export type { BountyInfo };
 export { CONTRACT_ADDRESSES };
 
-// ── Legacy / Compatibility Functions ─────────────────────────────────────
+// ── Read-only Provider (for view functions, no signer needed) ────────────
+
+export function getReadProvider(): JsonRpcProvider {
+  return new JsonRpcProvider(CONTRACT_ADDRESSES.rpcUrl, CONTRACT_ADDRESSES.chainId);
+}
+
+// ── Smart Account Functions ──────────────────────────────────────────────
 
 /**
  * Check if an address is a Smart Account (has contract code).
+ * Uses the read-only provider to avoid wallet connection issues.
  */
-export async function isSmartAccount(
-  address: string,
-  rpcUrl?: string
-): Promise<boolean> {
+export async function isSmartAccount(address: string): Promise<boolean> {
   try {
-    const provider = new BrowserProvider(window.ethereum as any);
+    const provider = getReadProvider();
     const code = await provider.getCode(address);
-    // Smart Accounts have contract code, EOAs don't
     return code !== "0x";
   } catch (error) {
     console.error("Error checking Smart Account:", error);
@@ -57,43 +60,33 @@ export async function isSmartAccount(
 
 /**
  * Get or create a Smart Account for the user.
- * Uses the SmartAccountAdapter contract.
+ * @param wallet - ethers Wallet connected to Arbitrum Sepolia (from Web3Auth context)
  */
 export async function getOrCreateSmartAccount(
   userAddress: string,
-  _rpcUrl?: string,
-  _factoryAddress?: string
+  wallet?: Wallet
 ): Promise<string> {
   try {
-    const provider = new BrowserProvider(window.ethereum as any);
-    const signer = await provider.getSigner();
-
-    // Check the SmartAccountAdapter for an existing registered Smart Account
+    const provider = getReadProvider();
     const adapterAddress = CONTRACT_ADDRESSES.smartAccountAdapter;
     const SMART_ACCOUNT_ADAPTER_ABI = [
       "function getUserSmartAccount(address user) view returns (address)",
       "function registerSmartAccount(address user, address smartAccount)",
     ];
+
     const adapter = new Contract(adapterAddress, SMART_ACCOUNT_ADAPTER_ABI, provider);
 
-    // Check if user already has a Smart Account
+    // Check if user already has a Smart Account registered
     let smartAccount = await adapter.getUserSmartAccount(userAddress);
 
     if (smartAccount === "0x0000000000000000000000000000000000000000") {
-      // If no Smart Account yet, the user's EOA itself acts as the
-      // "smart account" for now. In production, use EIP-7702 upgrade.
-      // For the hackathon MVP, the EOA address IS the smart account.
-      const eoaAsSmartAccount = userAddress;
-
-      // Register it — create a new contract with signer
-      const adapterWithSigner = new Contract(adapterAddress, SMART_ACCOUNT_ADAPTER_ABI, signer);
-      const tx = await adapterWithSigner.registerSmartAccount(
-        userAddress,
-        eoaAsSmartAccount
-      );
+      // Register the user's EOA as their Smart Account
+      // In production, this would use EIP-7702 to upgrade the EOA
+      if (!wallet) throw new Error("Wallet needed to register Smart Account");
+      const adapterWithSigner = new Contract(adapterAddress, SMART_ACCOUNT_ADAPTER_ABI, wallet);
+      const tx = await adapterWithSigner.registerSmartAccount(userAddress, userAddress);
       await tx.wait();
-
-      smartAccount = eoaAsSmartAccount;
+      smartAccount = userAddress;
       console.log("Smart Account registered:", smartAccount);
     }
 
@@ -109,11 +102,10 @@ export async function getOrCreateSmartAccount(
  */
 export async function isFactoryPaused(): Promise<boolean> {
   try {
-    const provider = new BrowserProvider(window.ethereum as any);
-    const FACTORY_ABI = ["function paused() view returns (bool)"];
+    const provider = getReadProvider();
     const factory = new Contract(
       CONTRACT_ADDRESSES.bountyFactory,
-      FACTORY_ABI,
+      ["function paused() view returns (bool)"],
       provider
     );
     return await factory.paused();
@@ -124,19 +116,20 @@ export async function isFactoryPaused(): Promise<boolean> {
 
 /**
  * Create a bounty with full funding flow:
- * 1. Approve USDC spending to the bounty contract
- * 2. Deploy the bounty via BountyFactory
+ * 1. Deploy the bounty via BountyFactory
+ * 2. Approve USDC spending to the bounty contract
  * 3. Deposit USDC into the new bounty
+ *
+ * @param wallet - ethers Wallet connected to Arbitrum Sepolia (from Web3Auth context)
  */
 export async function createBountyWithFunding(
   repoName: string,
   issueNumber: number,
   amount: string,
-  contestPeriodSeconds: number = 7 * 24 * 60 * 60, // 7 days default
+  contestPeriodSeconds: number = 7 * 24 * 60 * 60,
+  wallet: Wallet,
   agentAddress: string = CONTRACT_ADDRESSES.agentDelegation
 ): Promise<{ bountyId: number; bountyAddress: string; txHashes: string[] }> {
-  const provider = new BrowserProvider(window.ethereum as any);
-  const signer = await provider.getSigner();
   const txHashes: string[] = [];
 
   // Step 1: Create the bounty on-chain
@@ -145,15 +138,15 @@ export async function createBountyWithFunding(
     contestPeriodSeconds,
     repoName,
     issueNumber,
-    signer
+    wallet
   );
 
   // Step 2: Approve USDC
-  const approveTxHash = await approveUSDC(bountyAddress, amount, signer);
+  const approveTxHash = await approveUSDC(bountyAddress, amount, wallet);
   txHashes.push(approveTxHash);
 
   // Step 3: Deposit USDC into the bounty
-  const depositTxHash = await depositToBounty(bountyAddress, amount, signer);
+  const depositTxHash = await depositToBounty(bountyAddress, amount, wallet);
   txHashes.push(depositTxHash);
 
   return { bountyId, bountyAddress, txHashes };
