@@ -2,12 +2,23 @@
 
 import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
 import { Web3Auth } from '@web3auth/modal';
-import { Wallet, JsonRpcProvider } from 'ethers';
+import { EthereumPrivateKeyProvider } from '@web3auth/ethereum-provider';
+import { BrowserProvider, JsonRpcSigner } from 'ethers';
 
 // --- Config ---
 const RPC_URL = process.env.NEXT_PUBLIC_RPC_URL || 'https://sepolia-rollup.arbitrum.io/rpc';
 const CHAIN_ID = Number(process.env.NEXT_PUBLIC_CHAIN_ID) || 421614;
 const CLIENT_ID = process.env.NEXT_PUBLIC_WEB3AUTH_CLIENT_ID || '';
+
+const CHAIN_CONFIG = {
+  chainNamespace: 'eip155' as const,
+  chainId: '0x' + CHAIN_ID.toString(16),
+  rpcTarget: RPC_URL,
+  displayName: 'Arbitrum Sepolia',
+  blockExplorerUrl: 'https://sepolia.arbiscan.io',
+  ticker: 'ETH',
+  tickerName: 'Ethereum',
+};
 
 // --- Types ---
 type Web3AuthContextType = {
@@ -16,11 +27,12 @@ type Web3AuthContextType = {
   userAccount: string | null;
   userEmail: string | null;
   /**
-   * ethers Wallet connected directly to Arbitrum Sepolia via JsonRpcProvider.
-   * This bypasses Web3Auth's chain routing (which forces Ethereum Sepolia)
-   * by extracting the private key and connecting to our own RPC endpoint.
+   * ethers JsonRpcSigner wrapping Web3Auth's EIP-1193 provider.
+   * Uses the Sapphire smart account infrastructure under the hood —
+   * transactions are bundled as UserOps by Web3Auth's bundler.
+   * The chain is configured to Arbitrum Sepolia via EthereumPrivateKeyProvider.
    */
-  signer: Wallet | null;
+  signer: JsonRpcSigner | null;
   login: () => Promise<string | null>;
   logout: () => Promise<void>;
 };
@@ -33,15 +45,20 @@ export const Web3AuthProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   const [isInitialized, setIsInitialized] = useState(false);
   const [userAccount, setUserAccount] = useState<string | null>(null);
   const [userEmail, setUserEmail] = useState<string | null>(null);
-  const [signer, setSigner] = useState<Wallet | null>(null);
+  const [signer, setSigner] = useState<JsonRpcSigner | null>(null);
 
   // Initialize Web3Auth
   useEffect(() => {
     const init = async () => {
       try {
+        const privateKeyProvider = new EthereumPrivateKeyProvider({
+          config: { chainConfig: CHAIN_CONFIG },
+        });
+
         const w3a = new Web3Auth({
           clientId: CLIENT_ID,
           web3AuthNetwork: 'sapphire_devnet',
+          privateKeyProvider,
           uiConfig: {
             appName: 'PRaise',
             defaultLanguage: 'en',
@@ -79,24 +96,22 @@ export const Web3AuthProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       // Get the EIP-1193 provider from the connection
       const ethProvider = (connection as any).ethereumProvider || connection;
 
-      // Extract private key and create a Wallet connected to Arbitrum Sepolia.
-      // This bypasses Web3Auth's Infura proxy (which forces Ethereum Sepolia)
-      // and connects us directly to our chosen RPC endpoint.
-      let privateKey: string | null = null;
-      try {
-        privateKey = await ethProvider.request({ method: 'eth_private_key' });
-      } catch (e) {
-        console.error('Failed to get private key from Web3Auth:', e);
-        return null;
-      }
+      // Use BrowserProvider wrapping Web3Auth's provider for signing.
+      // Web3Auth Sapphire (sapphire_devnet) uses ERC-4337 smart accounts,
+      // which don't expose a private key. Instead, we create an ethers-compatible
+      // signer from the Web3Auth EIP-1193 provider.
+      // The chain is configured via EthereumPrivateKeyProvider above.
+      const browserProvider = new BrowserProvider(ethProvider);
 
-      if (!privateKey) return null;
+      // Get the user's address first
+      const accounts: string[] = await ethProvider.request({ method: 'eth_requestAccounts' });
+      const account = accounts?.[0]?.toLowerCase() || null;
+      if (!account) return null;
 
-      const rpcProvider = new JsonRpcProvider(RPC_URL, CHAIN_ID);
-      const wallet = new Wallet(privateKey, rpcProvider);
-      setSigner(wallet);
-
-      const account = wallet.address.toLowerCase();
+      // Get signer by known address — this skips the eth_accounts call
+      // that would fail with Web3Auth's AA provider
+      const ethersSigner = await browserProvider.getSigner(account);
+      setSigner(ethersSigner);
       setUserAccount(account);
 
       // Get user info

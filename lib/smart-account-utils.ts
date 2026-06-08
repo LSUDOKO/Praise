@@ -1,6 +1,6 @@
 "use client";
 
-import { Wallet, JsonRpcProvider, Contract } from "ethers";
+import { JsonRpcSigner, JsonRpcProvider, Contract } from "ethers";
 import {
   getUSDCBalance,
   approveUSDC,
@@ -60,11 +60,11 @@ export async function isSmartAccount(address: string): Promise<boolean> {
 
 /**
  * Get or create a Smart Account for the user.
- * @param wallet - ethers Wallet connected to Arbitrum Sepolia (from Web3Auth context)
+ * @param signer - ethers JsonRpcSigner wrapping Web3Auth's provider (from Web3Auth context)
  */
 export async function getOrCreateSmartAccount(
   userAddress: string,
-  wallet?: Wallet
+  signer?: JsonRpcSigner
 ): Promise<string> {
   try {
     const provider = getReadProvider();
@@ -82,8 +82,8 @@ export async function getOrCreateSmartAccount(
     if (smartAccount === "0x0000000000000000000000000000000000000000") {
       // Register the user's EOA as their Smart Account
       // In production, this would use EIP-7702 to upgrade the EOA
-      if (!wallet) throw new Error("Wallet needed to register Smart Account");
-      const adapterWithSigner = new Contract(adapterAddress, SMART_ACCOUNT_ADAPTER_ABI, wallet);
+      if (!signer) throw new Error("Signer needed to register Smart Account");
+      const adapterWithSigner = new Contract(adapterAddress, SMART_ACCOUNT_ADAPTER_ABI, signer);
       const tx = await adapterWithSigner.registerSmartAccount(userAddress, userAddress);
       await tx.wait();
       smartAccount = userAddress;
@@ -120,14 +120,14 @@ export async function isFactoryPaused(): Promise<boolean> {
  * 2. Approve USDC spending to the bounty contract
  * 3. Deposit USDC into the new bounty
  *
- * @param wallet - ethers Wallet connected to Arbitrum Sepolia (from Web3Auth context)
+ * @param signer - ethers JsonRpcSigner wrapping Web3Auth's provider (from Web3Auth context)
  */
 export async function createBountyWithFunding(
   repoName: string,
   issueNumber: number,
   amount: string,
   contestPeriodSeconds: number = 7 * 24 * 60 * 60,
-  wallet: Wallet,
+  signer: JsonRpcSigner,
   agentAddress: string = CONTRACT_ADDRESSES.agentDelegation
 ): Promise<{ bountyId: number; bountyAddress: string; txHashes: string[] }> {
   const txHashes: string[] = [];
@@ -138,15 +138,15 @@ export async function createBountyWithFunding(
     contestPeriodSeconds,
     repoName,
     issueNumber,
-    wallet
+    signer
   );
 
   // Step 2: Approve USDC
-  const approveTxHash = await approveUSDC(bountyAddress, amount, wallet);
+  const approveTxHash = await approveUSDC(bountyAddress, amount, signer);
   txHashes.push(approveTxHash);
 
   // Step 3: Deposit USDC into the bounty
-  const depositTxHash = await depositToBounty(bountyAddress, amount, wallet);
+  const depositTxHash = await depositToBounty(bountyAddress, amount, signer);
   txHashes.push(depositTxHash);
 
   return { bountyId, bountyAddress, txHashes };
