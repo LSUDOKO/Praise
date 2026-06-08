@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "skills": {
+    "1shot-api": {
+      "source": "1Shot-API/skills",
+      "sourceType": "github",
+      "skillPath": "1shot-api/SKILL.md",
+      "computedHash": "d91048dfd2f220e7fb6ea0d7613314196ab02ec6d236455b0ae1210767411173"
+    },
+    "public-relayer": {
+      "source": "1Shot-API/skills",
+      "sourceType": "github",
+      "skillPath": "public-relayer/SKILL.md",
+      "computedHash": "808a64162cdc6f698118b6e239d30bd078bd03bd6cbb36b7870ad5da5604fae5"
+    },
+    "web3auth": {
+      "source": "web3auth/skill",
+      "sourceType": "github",
+      "skillPath": "skills/web3auth/SKILL.md",
+      "computedHash": "b2d37fe412d73cd873db4dd4a1b5a79019b3847933524e8a8696e82a1a36d84f"
+    },
+    "webauthn-prf-wallet": {
+      "source": "1Shot-API/skills",
+      "sourceType": "github",
+      "skillPath": "webauthn-prf-wallet/SKILL.md",
+      "computedHash": "bcc503a08023feb27962219c6ef1accbe7eb249655ce0e2cead8e8b496de3dbc"
+    }
+  }
+}

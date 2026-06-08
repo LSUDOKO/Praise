@@ -1,0 +1,53 @@
+Compiling 1 files with Solc 0.8.24
+Solc 0.8.24 finished in 1.65s
+Compiler run successful with warnings:
+Warning (5667): Unused function parameter. Remove or comment out the variable name to silence this warning.
+   --> src/BountyRegistry.sol:169:9:
+    |
+169 |         string calldata labelsJson
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Script ran successfully.
+
+== Logs ==
+  Using real USDC at: 0x75cc4FDf07Da32Fd5a00F8B922e7d51ddA4e50B9
+  AgentDelegation deployed at: 0x9e5B19E900adCCd23aDc74867b056Dd6f1d9aA59
+  BountyFactory deployed at: 0x2cf9b3bC314504E4CA30eED0C527256Ea76fddc5
+  BountyRegistry deployed at: 0x76090E4943910F41290Aa4eC0c63B7F3aB6b6241
+  DisputeResolver deployed at: 0x05123409689B7BA30Ebb28d750d5250f242eA99E
+  SmartAccountAdapter deployed at: 0x78a5258dB533F8Ac986668DfFEB05019819eeC79
+  
+=== PRaise Deployment Summary ===
+  USDC: 0x75cc4FDf07Da32Fd5a00F8B922e7d51ddA4e50B9
+  AgentDelegation: 0x9e5B19E900adCCd23aDc74867b056Dd6f1d9aA59
+  BountyFactory: 0x2cf9b3bC314504E4CA30eED0C527256Ea76fddc5
+  BountyRegistry: 0x76090E4943910F41290Aa4eC0c63B7F3aB6b6241
+  DisputeResolver: 0x05123409689B7BA30Ebb28d750d5250f242eA99E
+  SmartAccountAdapter: 0x78a5258dB533F8Ac986668DfFEB05019819eeC79
+  Trusted Signer: 0x9F69599E5f0CE0D5D28795eFed28F0166c9F3955
+  Score Threshold: 80
+  ================================
+
+## Setting up 1 EVM.
+
+==========================
+
+Chain 421614
+
+Estimated gas price: 0.040132001 gwei
+
+Estimated total gas used for script: 20411653
+
+Estimated amount required: 0.000819160478607653 ETH
+
+==========================
+
+
+==========================
+
+ONCHAIN EXECUTION COMPLETE & SUCCESSFUL.
+
+Transactions saved to: /home/arpit/Desktop/hackathon_projects/praise/contracts/broadcast/Deploy.s.sol/421614/run-latest.json
+
+Sensitive values saved to: /home/arpit/Desktop/hackathon_projects/praise/contracts/cache/Deploy.s.sol/421614/run-latest.json
+
