@@ -3,6 +3,11 @@ import { db, schema } from "@/lib/db/client";
 import { challengeStore } from "@/lib/db/redis";
 import { eq } from "drizzle-orm";
 import { randomUUID } from "crypto";
+import {
+  isX402Enabled,
+  paymentRequiredResponse,
+  verifyX402PaymentProof,
+} from "@/lib/x402/server";
 
 /**
  * Helper: get authenticated user from session cookie.
@@ -30,7 +35,7 @@ export async function GET() {
     console.error("List bounties error:", err);
     return NextResponse.json(
       { error: "Failed to list bounties" },
-      { status: 500 }
+      { status: 500 },
     );
   }
 }
@@ -57,18 +62,42 @@ export async function POST(req: NextRequest) {
 
     if (!user.accountAddress) {
       return NextResponse.json(
-        { error: "Wallet not connected. Please sign in with your passkey first." },
-        { status: 400 }
+        {
+          error:
+            "Wallet not connected. Please sign in with your passkey first.",
+        },
+        { status: 400 },
       );
     }
 
+    if (isX402Enabled()) {
+      const payment = await verifyX402PaymentProof(
+        req.headers.get("x-payment-proof"),
+      );
+      if (!payment.ok) {
+        return paymentRequiredResponse({
+          headers: { "X-Payment-Reason": payment.reason },
+        }) as NextResponse;
+      }
+    }
+
     const body = await req.json();
-    const { repo, issueNumber, amount, agentAddress, contestPeriod, bountyAddress } = body;
+    const {
+      repo,
+      issueNumber,
+      amount,
+      agentAddress,
+      contestPeriod,
+      bountyAddress,
+    } = body;
 
     if (!repo || !issueNumber || !amount || !agentAddress || !contestPeriod) {
       return NextResponse.json(
-        { error: "Missing required fields: repo, issueNumber, amount, agentAddress, contestPeriod" },
-        { status: 400 }
+        {
+          error:
+            "Missing required fields: repo, issueNumber, amount, agentAddress, contestPeriod",
+        },
+        { status: 400 },
       );
     }
 
@@ -95,7 +124,7 @@ export async function POST(req: NextRequest) {
     console.error("Create bounty error:", err);
     return NextResponse.json(
       { error: err instanceof Error ? err.message : "Failed to create bounty" },
-      { status: 500 }
+      { status: 500 },
     );
   }
 }

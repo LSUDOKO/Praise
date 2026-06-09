@@ -25,7 +25,7 @@ export async function POST(req: NextRequest) {
       console.error("ONESHOT_WEBHOOK_PUBLIC_KEY not configured");
       return NextResponse.json(
         { error: "Server misconfigured" },
-        { status: 500 }
+        { status: 500 },
       );
     }
 
@@ -33,17 +33,17 @@ export async function POST(req: NextRequest) {
 
     if (!isValid) {
       console.warn("1Shot webhook signature verification failed");
-      return NextResponse.json(
-        { error: "Invalid signature" },
-        { status: 403 }
-      );
+      return NextResponse.json({ error: "Invalid signature" }, { status: 403 });
     }
 
-    // Process webhook event
-    const { eventName, content } = body;
+    // Process webhook event. 1Shot API webhooks use eventName/content;
+    // public relayer webhooks use numeric type and data.
+    const { eventName, content, type, data } = body;
+    const relayerStatus = typeof type === "number" ? type : null;
+    const memoSource = content?.memo || data?.memo;
 
-    if (eventName === "TransactionExecutionSuccess") {
-      const memo = content?.memo;
+    if (eventName === "TransactionExecutionSuccess" || relayerStatus === 0) {
+      const memo = memoSource;
       if (memo) {
         try {
           const memoData = JSON.parse(memo);
@@ -59,8 +59,11 @@ export async function POST(req: NextRequest) {
           console.log("Transaction success with non-JSON memo:", memo);
         }
       }
-    } else if (eventName === "TransactionExecutionFailure") {
-      const memo = content?.memo;
+    } else if (
+      eventName === "TransactionExecutionFailure" ||
+      relayerStatus === 1
+    ) {
+      const memo = memoSource;
       if (memo) {
         try {
           const memoData = JSON.parse(memo);
@@ -72,7 +75,7 @@ export async function POST(req: NextRequest) {
               .where(eq(schema.bounties.id, memoData.bountyId));
             console.error(
               `Transaction failed for bounty ${memoData.bountyId}:`,
-              content?.error
+              content?.error || data?.message || data?.data,
             );
           }
         } catch {
@@ -86,7 +89,7 @@ export async function POST(req: NextRequest) {
     console.error("1Shot webhook processing error:", err);
     return NextResponse.json(
       { error: "Webhook processing failed" },
-      { status: 500 }
+      { status: 500 },
     );
   }
 }

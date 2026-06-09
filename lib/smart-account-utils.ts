@@ -1,6 +1,6 @@
 "use client";
 
-import { JsonRpcSigner, JsonRpcProvider, Contract } from "ethers";
+import { Contract } from "ethers";
 import {
   getUSDCBalance,
   approveUSDC,
@@ -13,6 +13,7 @@ import {
   isAttestationUsed,
   getAttestationTime,
   computeAttestationHash,
+  getReadProvider,
   CONTRACT_ADDRESSES,
 } from "@/lib/contracts/client";
 import type { BountyInfo } from "@/lib/contracts/client";
@@ -35,12 +36,6 @@ export {
 export type { BountyInfo };
 export { CONTRACT_ADDRESSES };
 
-// ── Read-only Provider (for view functions, no signer needed) ────────────
-
-export function getReadProvider(): JsonRpcProvider {
-  return new JsonRpcProvider(CONTRACT_ADDRESSES.rpcUrl, CONTRACT_ADDRESSES.chainId);
-}
-
 // ── Smart Account Functions ──────────────────────────────────────────────
 
 /**
@@ -60,37 +55,45 @@ export async function isSmartAccount(address: string): Promise<boolean> {
 
 /**
  * Get or create a Smart Account for the user.
- * @param signer - ethers JsonRpcSigner wrapping Web3Auth's provider (from Web3Auth context)
+ *
+ * Checks if the user already has a Smart Account registered on-chain via
+ * the SmartAccountAdapter. If so, returns it. If not, returns the user's
+ * EOA address directly — the on-chain registration is skipped because
+ * Web3Auth's Sapphire provider (AA/ERC-4337) does not support the
+ * standard eth_sendTransaction RPC method needed to write to the contract.
+ *
+ * The registerSmartAccount function on the contract has no access control
+ * and is purely informational (maps user -> smart account). Skipping it
+ * does not affect any core functionality — permissions and delegations
+ * work with the user's EOA address directly.
+ *
+ * @param userAddress - The user's wallet address
  */
 export async function getOrCreateSmartAccount(
-  userAddress: string,
-  signer?: JsonRpcSigner
+  userAddress: string
 ): Promise<string> {
   try {
-    const provider = getReadProvider();
+    const readProvider = getReadProvider();
     const adapterAddress = CONTRACT_ADDRESSES.smartAccountAdapter;
     const SMART_ACCOUNT_ADAPTER_ABI = [
       "function getUserSmartAccount(address user) view returns (address)",
-      "function registerSmartAccount(address user, address smartAccount)",
     ];
 
-    const adapter = new Contract(adapterAddress, SMART_ACCOUNT_ADAPTER_ABI, provider);
+    const adapter = new Contract(adapterAddress, SMART_ACCOUNT_ADAPTER_ABI, readProvider);
 
-    // Check if user already has a Smart Account registered
-    let smartAccount = await adapter.getUserSmartAccount(userAddress);
+    // Check if user already has a Smart Account registered on-chain
+    const smartAccount: string = await adapter.getUserSmartAccount(userAddress);
 
-    if (smartAccount === "0x0000000000000000000000000000000000000000") {
-      // Register the user's EOA as their Smart Account
-      // In production, this would use EIP-7702 to upgrade the EOA
-      if (!signer) throw new Error("Signer needed to register Smart Account");
-      const adapterWithSigner = new Contract(adapterAddress, SMART_ACCOUNT_ADAPTER_ABI, signer);
-      const tx = await adapterWithSigner.registerSmartAccount(userAddress, userAddress);
-      await tx.wait();
-      smartAccount = userAddress;
-      console.log("Smart Account registered:", smartAccount);
+    if (smartAccount !== "0x0000000000000000000000000000000000000000") {
+      console.log("Found existing Smart Account:", smartAccount);
+      return smartAccount;
     }
 
-    return smartAccount;
+    // No on-chain registration — return the user's EOA as their smart account.
+    // The registerSmartAccount function is purely informational and has no
+    // access control. Skipping it doesn't affect any core functionality.
+    console.log("Using EOA as Smart Account:", userAddress);
+    return userAddress;
   } catch (error) {
     console.error("Error getting/creating Smart Account:", error);
     throw error;
@@ -120,14 +123,16 @@ export async function isFactoryPaused(): Promise<boolean> {
  * 2. Approve USDC spending to the bounty contract
  * 3. Deposit USDC into the new bounty
  *
- * @param signer - ethers JsonRpcSigner wrapping Web3Auth's provider (from Web3Auth context)
+ * @param provider - Raw Web3Auth EIP-1193 provider (from Web3Auth context)
+ * @param from     - User's wallet address
  */
 export async function createBountyWithFunding(
   repoName: string,
   issueNumber: number,
   amount: string,
-  contestPeriodSeconds: number = 7 * 24 * 60 * 60,
-  signer: JsonRpcSigner,
+  contestPeriodSeconds: number,
+  provider: any,
+  from: string,
   agentAddress: string = CONTRACT_ADDRESSES.agentDelegation
 ): Promise<{ bountyId: number; bountyAddress: string; txHashes: string[] }> {
   const txHashes: string[] = [];
@@ -138,15 +143,16 @@ export async function createBountyWithFunding(
     contestPeriodSeconds,
     repoName,
     issueNumber,
-    signer
+    provider,
+    from
   );
 
   // Step 2: Approve USDC
-  const approveTxHash = await approveUSDC(bountyAddress, amount, signer);
+  const approveTxHash = await approveUSDC(bountyAddress, amount, provider, from);
   txHashes.push(approveTxHash);
 
   // Step 3: Deposit USDC into the bounty
-  const depositTxHash = await depositToBounty(bountyAddress, amount, signer);
+  const depositTxHash = await depositToBounty(bountyAddress, amount, provider, from);
   txHashes.push(depositTxHash);
 
   return { bountyId, bountyAddress, txHashes };

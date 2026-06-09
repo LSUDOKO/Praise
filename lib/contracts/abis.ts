@@ -138,7 +138,7 @@ export const ERC20_ABI = [
 
 // Contract addresses on Arbitrum Sepolia (LIVE — redeployed with dispute resolver fix)
 export const CONTRACT_ADDRESSES = {
-  usdc:    "0x75cc4FDf07Da32Fd5a00F8B922e7d51ddA4e50B9" as const,
+  usdc:    "0x75faf114eafb1BDbe2F0316DF893fd58CE46AA4d" as const,
   bountyFactory: "0x4d8bC026ceD696577aD57f1bA4eC2AF552b13667" as const,
   agentDelegation: "0x1abA83786Cf074eEFd2b09a81b88E06ee0F628e9" as const,
   bountyRegistry: "0x875a92Cac246703ed77282077f2d43012249e42c" as const,

@@ -7,7 +7,7 @@ import { useRouter } from 'next/navigation';
 
 export default function CreateBountyPage() {
   const router = useRouter();
-  const { isAuthenticated, isInitialized, signer } = useWeb3Auth();
+  const { isAuthenticated, isInitialized, provider, userAccount } = useWeb3Auth();
 
   const [step, setStep] = useState<'connect' | 'repo' | 'issue' | 'review' | 'confirming'>('connect');
   const [loading, setLoading] = useState(false);
@@ -98,7 +98,7 @@ export default function CreateBountyPage() {
     try {
       const contestPeriodSeconds = parseInt(contestPeriodDays) * 24 * 60 * 60;
 
-      if (!signer) {
+      if (!provider || !userAccount) {
         setError('Please connect your wallet first');
         setStep('review');
         return;
@@ -108,7 +108,8 @@ export default function CreateBountyPage() {
         parseInt(issueNumber),
         bountyAmount,
         contestPeriodSeconds,
-        signer
+        provider,
+        userAccount
       );
 
       setTxHashes(result.txHashes);

@@ -1,13 +1,11 @@
 "use client";
 
-import { BrowserProvider, JsonRpcProvider, Contract, formatUnits, parseUnits, solidityPackedKeccak256 } from "ethers";
+import { JsonRpcProvider, Contract, formatUnits, parseUnits, solidityPackedKeccak256, Interface } from "ethers";
 import {
   BOUNTY_ABI,
   BOUNTY_FACTORY_ABI,
   AGENT_DELEGATION_ABI,
   BOUNTY_REGISTRY_ABI,
-  DISPUTE_RESOLVER_ABI,
-  SMART_ACCOUNT_ADAPTER_ABI,
   ERC20_ABI,
   CONTRACT_ADDRESSES,
 } from "./abis";
@@ -20,50 +18,63 @@ export function getReadProvider(): JsonRpcProvider {
   return new JsonRpcProvider(CONTRACT_ADDRESSES.rpcUrl, CONTRACT_ADDRESSES.chainId);
 }
 
-export async function getSignerProvider(): Promise<BrowserProvider> {
-  if (typeof window === "undefined" || !(window as any).ethereum) {
-    throw new Error("MetaMask or Web3Auth wallet not available");
-  }
-  return new BrowserProvider((window as any).ethereum);
-}
+// ── Raw Transaction Sender (for Web3Auth Sapphire provider) ──────────────
+//
+// Web3Auth's Sapphire provider bundles transactions as UserOps via ERC-4337.
+// It does NOT support standard ethers BrowserProvider wrapping because its
+// internal RPC routing doesn't handle eth_blockNumber/eth_chainId calls for
+// Arbitrum Sepolia. Instead, we use the direct JsonRpcProvider for all reads
+// and send raw eth_sendTransaction through the Web3Auth provider for writes.
 
 /**
- * Resolve a signer from a passed value.
- * - If the value already has getAddress (Wallet or JsonRpcSigner), use it directly
- * - If the value is a Provider, get the signer from it
- * - If undefined, create a BrowserProvider from window.ethereum
+ * Send a raw transaction through the Web3Auth provider.
+ * - Uses direct JsonRpcProvider for nonce, gas estimate, and chain ID
+ * - Only uses Web3Auth's provider for eth_sendTransaction (signing)
+ * - Waits for the receipt using the direct JsonRpcProvider
  */
-export async function resolveSigner(signer?: any): Promise<any> {
-  if (signer && typeof signer.getAddress === "function") return signer;
-  const p = signer || await getSignerProvider();
-  return p.getSigner();
+export async function sendTxViaProvider(
+  provider: any,          // Web3Auth's EIP-1193 provider
+  from: string,
+  to: string,
+  data: string,
+  value: string = "0x0"
+): Promise<string> {
+  const readProvider = getReadProvider();
+
+  // Send the transaction through Web3Auth's provider (handles AA bundling).
+  // We only pass from/to/data/value — the AA bundler manages nonce, gas, and
+  // chainId internally. Passing them explicitly could conflict with the
+  // bundler's own accounting (AA nonces are tracked by the entry point).
+  const txHash: string = await provider.request({
+    method: "eth_sendTransaction",
+    params: [{ from, to, data, value }],
+  });
+
+  // Wait for the receipt using the direct provider
+  const receipt = await readProvider.waitForTransaction(txHash);
+  return receipt?.hash || txHash;
 }
 
 // ── Contract Instances ───────────────────────────────────────────────────
 
-export function getFactoryContract(signer?: any) {
-  const provider = signer ? signer : getReadProvider();
-  return new Contract(CONTRACT_ADDRESSES.bountyFactory, BOUNTY_FACTORY_ABI, provider);
+export function getFactoryContract() {
+  return new Contract(CONTRACT_ADDRESSES.bountyFactory, BOUNTY_FACTORY_ABI, getReadProvider());
 }
 
-export function getBountyContract(bountyAddress: string, signer?: any) {
-  const provider = signer ? signer : getReadProvider();
-  return new Contract(bountyAddress, BOUNTY_ABI, provider);
+export function getBountyContract(bountyAddress: string) {
+  return new Contract(bountyAddress, BOUNTY_ABI, getReadProvider());
 }
 
-export function getRegistryContract(signer?: any) {
-  const provider = signer ? signer : getReadProvider();
-  return new Contract(CONTRACT_ADDRESSES.bountyRegistry, BOUNTY_REGISTRY_ABI, provider);
+export function getRegistryContract() {
+  return new Contract(CONTRACT_ADDRESSES.bountyRegistry, BOUNTY_REGISTRY_ABI, getReadProvider());
 }
 
-export function getUSDCContract(signer?: any) {
-  const provider = signer ? signer : getReadProvider();
-  return new Contract(CONTRACT_ADDRESSES.usdc, ERC20_ABI, provider);
+export function getUSDCContract() {
+  return new Contract(CONTRACT_ADDRESSES.usdc, ERC20_ABI, getReadProvider());
 }
 
-export function getAgentDelegationContract(signer?: any) {
-  const provider = signer ? signer : getReadProvider();
-  return new Contract(CONTRACT_ADDRESSES.agentDelegation, AGENT_DELEGATION_ABI, provider);
+export function getAgentDelegationContract() {
+  return new Contract(CONTRACT_ADDRESSES.agentDelegation, AGENT_DELEGATION_ABI, getReadProvider());
 }
 
 // ── Balance & Formatting ─────────────────────────────────────────────────
@@ -80,18 +91,26 @@ export async function getUSDCBalance(address: string): Promise<string> {
   }
 }
 
+// ── USDC Approve ─────────────────────────────────────────────────────────
+
+/**
+ * Approve USDC spending.
+ * Sends the transaction through the Web3Auth raw provider (handles AA bundling).
+ */
 export async function approveUSDC(
   spenderAddress: string,
   amount: string,
-  signer?: any
+  provider: any,      // Web3Auth raw EIP-1193 provider
+  from: string         // user's address
 ): Promise<string> {
-  const signerObj = await resolveSigner(signer);
-  const contract = getUSDCContract(signerObj);
+  const contract = getUSDCContract();
   const decimals = await contract.decimals();
   const parsedAmount = parseUnits(amount, decimals);
-  const tx = await contract.approve(spenderAddress, parsedAmount);
-  const receipt = await tx.wait();
-  return receipt?.hash || tx.hash;
+
+  const iface = new Interface(ERC20_ABI);
+  const data = iface.encodeFunctionData("approve", [spenderAddress, parsedAmount]);
+
+  return sendTxViaProvider(provider, from, CONTRACT_ADDRESSES.usdc, data);
 }
 
 export async function getUSDCAllowance(
@@ -111,34 +130,46 @@ export interface CreateBountyResult {
   bountyAddress: string;
 }
 
+/**
+ * Create a bounty on chain via the Factory.
+ * Uses the raw Web3Auth provider for signing (AA bundling).
+ */
 export async function createBountyOnChain(
   agentAddress: string,
   contestPeriodSeconds: number,
   repoName: string,
   issueNumber: number,
-  signer?: any
+  provider: any,
+  from: string
 ): Promise<CreateBountyResult> {
-  const signerObj = await resolveSigner(signer);
-  const contract = getFactoryContract(signerObj);
-  const usdcAddress = CONTRACT_ADDRESSES.usdc;
-
-  const tx = await contract.createBounty(
+  const factoryInterface = new Interface(BOUNTY_FACTORY_ABI);
+  const data = factoryInterface.encodeFunctionData("createBounty", [
     agentAddress,
-    usdcAddress,
+    CONTRACT_ADDRESSES.usdc,
     contestPeriodSeconds,
     repoName,
-    issueNumber
-  );
-  const receipt = await tx.wait();
+    issueNumber,
+  ]);
 
-  // Parse event logs to get bountyId and bountyAddress
+  const txHash = await sendTxViaProvider(provider, from, CONTRACT_ADDRESSES.bountyFactory, data);
+
+  // Parse the receipt to extract the BountyCreated event
+  const readProvider = getReadProvider();
+  const receipt = await readProvider.getTransactionReceipt(txHash);
+
+  const factoryContract = new Contract(
+    CONTRACT_ADDRESSES.bountyFactory,
+    BOUNTY_FACTORY_ABI,
+    readProvider
+  );
+
   let bountyId = 0;
   let bountyAddress = "";
 
   if (receipt?.logs) {
     for (const log of receipt.logs) {
       try {
-        const parsed = contract.interface.parseLog({
+        const parsed = factoryContract.interface.parseLog({
           topics: log.topics as string[],
           data: log.data,
         });
@@ -283,21 +314,24 @@ export async function fetchBountiesByCreator(creatorAddress: string): Promise<Bo
 
 // ── Direct Bounty Interactions ───────────────────────────────────────────
 
+/**
+ * Deposit USDC into a bounty contract.
+ * Uses the raw Web3Auth provider for signing (AA bundling).
+ */
 export async function depositToBounty(
   bountyAddress: string,
   amount: string,
-  signer?: any
+  provider: any,
+  from: string
 ): Promise<string> {
-  const signerObj = await resolveSigner(signer);
-  const contract = getBountyContract(bountyAddress, signerObj);
-
-  const usdcContract = getUSDCContract(signerObj);
+  const usdcContract = getUSDCContract();
   const decimals = await usdcContract.decimals();
   const parsedAmount = parseUnits(amount, decimals);
 
-  const tx = await contract.deposit(parsedAmount);
-  const receipt = await tx.wait();
-  return receipt?.hash || tx.hash;
+  const bountyInterface = new Interface(BOUNTY_ABI);
+  const data = bountyInterface.encodeFunctionData("deposit", [parsedAmount]);
+
+  return sendTxViaProvider(provider, from, bountyAddress, data);
 }
 
 // ── Agent Delegation (Venice AI Verified Releases) ────────────────────────
@@ -314,21 +348,20 @@ export async function agentReleaseBounty(
   prMergeHash: string,
   nonce: number,
   signature: string,
-  signer?: any
+  provider: any,
+  from: string
 ): Promise<string> {
-  const signerObj = await resolveSigner(signer);
-  const contract = getAgentDelegationContract(signerObj);
-
-  const tx = await contract.verifyAndRelease(
+  const delegationInterface = new Interface(AGENT_DELEGATION_ABI);
+  const data = delegationInterface.encodeFunctionData("verifyAndRelease", [
     bountyAddress,
     contributor,
     score,
     prMergeHash,
     nonce,
-    signature
-  );
-  const receipt = await tx.wait();
-  return receipt?.hash || tx.hash;
+    signature,
+  ]);
+
+  return sendTxViaProvider(provider, from, CONTRACT_ADDRESSES.agentDelegation, data);
 }
 
 /**

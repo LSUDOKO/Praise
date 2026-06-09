@@ -9,6 +9,8 @@ import {
   getUSDCContract,
   CONTRACT_ADDRESSES,
   agentReleaseBounty,
+  sendTxViaProvider,
+  getReadProvider,
 } from '@/lib/contracts/client';
 import { ethers, formatUnits } from 'ethers';
 
@@ -58,7 +60,7 @@ type PermissionStep =
 export default function BountyDetailPage() {
   const params = useParams();
   const router = useRouter();
-  const { isAuthenticated, userAccount } = useWeb3Auth();
+  const { isAuthenticated, userAccount, provider } = useWeb3Auth();
   const bountyAddress = params.bountyId as string;
 
   const [detail, setDetail] = useState<BountyDetail | null>(null);
@@ -206,15 +208,13 @@ export default function BountyDetailPage() {
 
   // ── Release via Agent (Trusted Signer Path) ──────────────────────────
   const handleAgentRelease = async () => {
-    if (!detail || !userAccount) return;
+    if (!detail || !userAccount || !provider) return;
     setVerificationStep('preparing_tx');
 
     try {
       // In production, the Venice AI agent backend signs the verification
       // Here we call the verifyAndRelease function on AgentDelegation
       // The trusted signer (Venice AI backend) provides the signature
-      const provider = new ethers.BrowserProvider(window.ethereum as any);
-      const signer = await provider.getSigner();
 
       setVerificationStep('signing');
       const txHashResult = await agentReleaseBounty(
@@ -224,14 +224,16 @@ export default function BountyDetailPage() {
         ethers.keccak256(ethers.toUtf8Bytes(`pr-${submittedPR || 'manual'}`)),
         Math.floor(Date.now() / 1000),
         '0x', // signature - in production from Venice AI backend
-        signer
+        provider, // raw Web3Auth EIP-1193 provider
+        userAccount
       );
 
       setTxHash(txHashResult);
       setVerificationStep('waiting_confirmation');
 
-      // Wait for confirmation
-      const receipt = await provider.waitForTransaction(txHashResult);
+      // Wait for confirmation using direct JsonRpcProvider
+      const readProvider = getReadProvider();
+      const receipt = await readProvider.waitForTransaction(txHashResult);
       if (receipt?.status === 1) {
         setVerificationStep('complete');
         // Refresh bounty details
@@ -293,38 +295,46 @@ export default function BountyDetailPage() {
 
   // ── Grant Permission (ERC-7715) ──────────────────────────────────────
   const handleGrantPermission = async () => {
-    if (!detail || !userAccount) return;
+    if (!detail || !userAccount || !provider) return;
     setPermissionStep('requesting');
 
     try {
-      const provider = new ethers.BrowserProvider(window.ethereum as any);
-      const signer = await provider.getSigner();
-
       setPermissionStep('deploying');
 
       // Grant permission to the agent delegation contract
       const adapterABI = [
         "function grantPermission(address delegatee, address bountyAddress, uint256 maxAmount, uint256 durationSeconds) returns (bytes32 permissionId)",
       ];
-      const adapter = new ethers.Contract(
-        CONTRACT_ADDRESSES.smartAccountAdapter,
-        adapterABI,
-        signer
-      );
 
       const parsedAmount = ethers.parseUnits(detail.balance || '100', 6);
-      const tx = await adapter.grantPermission(
+      const iface = new ethers.Interface(adapterABI);
+      const data = iface.encodeFunctionData("grantPermission", [
         CONTRACT_ADDRESSES.agentDelegation,
         detail.address,
         parsedAmount,
-        86400 * 30 // 30 days
+        86400 * 30, // 30 days
+      ]);
+
+      const txHash = await sendTxViaProvider(
+        provider,
+        userAccount,
+        CONTRACT_ADDRESSES.smartAccountAdapter,
+        data
       );
-      const receipt = await tx.wait();
+
+      // Wait for receipt using direct JsonRpcProvider
+      const readProvider = getReadProvider();
+      const receipt = await readProvider.getTransactionReceipt(txHash);
 
       // Extract permissionId from logs
-      for (const log of receipt.logs) {
+      const logContract = new ethers.Contract(
+        CONTRACT_ADDRESSES.smartAccountAdapter,
+        adapterABI,
+        readProvider
+      );
+      for (const log of (receipt?.logs || [])) {
         try {
-          const parsed = adapter.interface.parseLog({
+          const parsed = logContract.interface.parseLog({
             topics: log.topics as string[],
             data: log.data,
           });

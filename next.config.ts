@@ -1,6 +1,11 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
+  // Fix Vercel / Turbopack workspace root detection when a parent
+  // package-lock.json exists alongside the project's own lockfile.
+  turbopack: {
+    root: __dirname,
+  },
   async headers() {
     return [
       {

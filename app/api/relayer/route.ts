@@ -15,7 +15,9 @@ const CHAIN_ID = CONTRACT_ADDRESSES.chainId;
 const PAYMENT_TOKEN = CONTRACT_ADDRESSES.usdc;
 
 // Use ethers Interface for ABI-encoded calldata
-const BOUNTY_INTERFACE = new Interface(["function release(address contributor)"]);
+const BOUNTY_INTERFACE = new Interface([
+  "function release(address contributor)",
+]);
 
 // ── POST /api/relayer ─────────────────────────────────────────────────────
 /**
@@ -56,7 +58,7 @@ export async function POST(req: NextRequest) {
         if (!transactions || !Array.isArray(transactions)) {
           return NextResponse.json(
             { error: "transactions array is required" },
-            { status: 400 }
+            { status: 400 },
           );
         }
 
@@ -82,7 +84,7 @@ export async function POST(req: NextRequest) {
         if (!transactions || !context) {
           return NextResponse.json(
             { error: "transactions and context are required" },
-            { status: 400 }
+            { status: 400 },
           );
         }
 
@@ -104,11 +106,11 @@ export async function POST(req: NextRequest) {
         if (!taskId) {
           return NextResponse.json(
             { error: "taskId is required" },
-            { status: 400 }
+            { status: 400 },
           );
         }
 
-        const status = await getStatus(taskId, logs ?? false);
+        const status = await getStatus(taskId, logs ?? false, CHAIN_ID);
         return NextResponse.json({ status });
       }
 
@@ -118,14 +120,15 @@ export async function POST(req: NextRequest) {
         if (!taskId) {
           return NextResponse.json(
             { error: "taskId is required" },
-            { status: 400 }
+            { status: 400 },
           );
         }
 
         const status = await waitForCompletion(
           taskId,
           pollIntervalMs,
-          maxAttempts
+          maxAttempts,
+          CHAIN_ID,
         );
         return NextResponse.json({ status });
       }
@@ -140,19 +143,21 @@ export async function POST(req: NextRequest) {
               error:
                 "bountyAddress, contributorAddress, and permissionContext are required",
             },
-            { status: 400 }
+            { status: 400 },
           );
         }
 
         // Encode release(contributor) call using ethers Interface
-        const releaseData = BOUNTY_INTERFACE.encodeFunctionData("release", [contributorAddress]);
+        const releaseData = BOUNTY_INTERFACE.encodeFunctionData("release", [
+          contributorAddress,
+        ]);
 
         const transactions = [
           {
             permissionContext: [permissionContext],
             executions: [
               {
-                to: bountyAddress,
+                target: bountyAddress,
                 value: "0x0",
                 data: releaseData,
               },
@@ -169,14 +174,14 @@ export async function POST(req: NextRequest) {
       default:
         return NextResponse.json(
           { error: `Unknown action: ${action}` },
-          { status: 400 }
+          { status: 400 },
         );
     }
   } catch (err) {
     console.error("Relayer API error:", err);
     return NextResponse.json(
       { error: err instanceof Error ? err.message : "Relayer request failed" },
-      { status: 500 }
+      { status: 500 },
     );
   }
 }

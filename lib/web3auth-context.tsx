@@ -1,130 +1,196 @@
-'use client';
+"use client";
 
-import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
-import { Web3Auth } from '@web3auth/modal';
-import { EthereumPrivateKeyProvider } from '@web3auth/ethereum-provider';
-import { BrowserProvider, JsonRpcSigner } from 'ethers';
+import React, {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useState,
+} from "react";
+import { Web3Auth } from "@web3auth/modal";
+import { EthereumPrivateKeyProvider } from "@web3auth/ethereum-provider";
 
-// --- Config ---
-const RPC_URL = process.env.NEXT_PUBLIC_RPC_URL || 'https://sepolia-rollup.arbitrum.io/rpc';
-const CHAIN_ID = Number(process.env.NEXT_PUBLIC_CHAIN_ID) || 421614;
-const CLIENT_ID = process.env.NEXT_PUBLIC_WEB3AUTH_CLIENT_ID || '';
-
-const CHAIN_CONFIG = {
-  chainNamespace: 'eip155' as const,
-  chainId: '0x' + CHAIN_ID.toString(16),
-  rpcTarget: RPC_URL,
-  displayName: 'Arbitrum Sepolia',
-  blockExplorerUrl: 'https://sepolia.arbiscan.io',
-  ticker: 'ETH',
-  tickerName: 'Ethereum',
+type Eip1193Provider = {
+  request: (args: { method: string; params?: unknown[] }) => Promise<unknown>;
 };
 
-// --- Types ---
+type Web3AuthUserInfo = {
+  email?: string;
+  name?: string;
+  profileImage?: string;
+};
+
+type Web3AuthInstance = Web3Auth & {
+  provider?: Eip1193Provider | null;
+  getUserInfo?: () => Promise<Web3AuthUserInfo>;
+};
+
+type Web3AuthConnection = Eip1193Provider & {
+  ethereumProvider?: Eip1193Provider;
+};
+
+const RPC_URL =
+  process.env.NEXT_PUBLIC_RPC_URL || "https://sepolia-rollup.arbitrum.io/rpc";
+const CHAIN_ID = Number(process.env.NEXT_PUBLIC_CHAIN_ID) || 421614;
+const CLIENT_ID = process.env.NEXT_PUBLIC_WEB3AUTH_CLIENT_ID || "";
+const WEB3AUTH_NETWORK =
+  process.env.NEXT_PUBLIC_WEB3AUTH_NETWORK || "sapphire_devnet";
+
+const CHAIN_CONFIG = {
+  chainNamespace: "eip155" as const,
+  chainId: `0x${CHAIN_ID.toString(16)}`,
+  rpcTarget: RPC_URL,
+  displayName: process.env.NEXT_PUBLIC_CHAIN_NAME || "Arbitrum Sepolia",
+  blockExplorerUrl:
+    process.env.NEXT_PUBLIC_BLOCK_EXPLORER_URL || "https://sepolia.arbiscan.io",
+  ticker: process.env.NEXT_PUBLIC_NATIVE_TICKER || "ETH",
+  tickerName: process.env.NEXT_PUBLIC_NATIVE_TICKER_NAME || "Ethereum",
+};
+
 type Web3AuthContextType = {
   isInitialized: boolean;
   isAuthenticated: boolean;
+  initializationError: string | null;
   userAccount: string | null;
   userEmail: string | null;
-  /**
-   * ethers JsonRpcSigner wrapping Web3Auth's EIP-1193 provider.
-   * Uses the Sapphire smart account infrastructure under the hood —
-   * transactions are bundled as UserOps by Web3Auth's bundler.
-   * The chain is configured to Arbitrum Sepolia via EthereumPrivateKeyProvider.
-   */
-  signer: JsonRpcSigner | null;
+  provider: Eip1193Provider | null;
   login: () => Promise<string | null>;
   logout: () => Promise<void>;
 };
 
-const Web3AuthContext = createContext<Web3AuthContextType | undefined>(undefined);
+const Web3AuthContext = createContext<Web3AuthContextType | undefined>(
+  undefined,
+);
 
-// --- Provider Component ---
-export const Web3AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [web3auth, setWeb3auth] = useState<Web3Auth | null>(null);
+async function resolveAccount(
+  provider: Eip1193Provider,
+): Promise<string | null> {
+  const accounts = await provider.request({ method: "eth_accounts" });
+  if (Array.isArray(accounts) && typeof accounts[0] === "string") {
+    return accounts[0].toLowerCase();
+  }
+  return null;
+}
+
+export const Web3AuthProvider: React.FC<{ children: React.ReactNode }> = ({
+  children,
+}) => {
+  const [web3auth, setWeb3auth] = useState<Web3AuthInstance | null>(null);
   const [isInitialized, setIsInitialized] = useState(false);
+  const [initializationError, setInitializationError] = useState<string | null>(
+    null,
+  );
   const [userAccount, setUserAccount] = useState<string | null>(null);
   const [userEmail, setUserEmail] = useState<string | null>(null);
-  const [signer, setSigner] = useState<JsonRpcSigner | null>(null);
+  const [provider, setProvider] = useState<Eip1193Provider | null>(null);
 
-  // Initialize Web3Auth
   useEffect(() => {
+    let cancelled = false;
+
+    const markInitialized = () => {
+      if (!cancelled) setIsInitialized(true);
+    };
+
     const init = async () => {
+      if (!CLIENT_ID) {
+        setInitializationError(
+          "NEXT_PUBLIC_WEB3AUTH_CLIENT_ID is not configured",
+        );
+        markInitialized();
+        return;
+      }
+
       try {
         const privateKeyProvider = new EthereumPrivateKeyProvider({
           config: { chainConfig: CHAIN_CONFIG },
         });
 
-        const w3a = new Web3Auth({
+        const instance = new Web3Auth({
           clientId: CLIENT_ID,
-          web3AuthNetwork: 'sapphire_devnet',
+          web3AuthNetwork: WEB3AUTH_NETWORK,
           privateKeyProvider,
           uiConfig: {
-            appName: 'PRaise',
-            defaultLanguage: 'en',
-            theme: {
-              primary: '#2563eb',
-            },
-            mode: 'light',
+            appName: "PRaise",
+            defaultLanguage: "en",
+            theme: { primary: "#2563eb" },
+            mode: "light",
           },
-        } as any);
+          authMode: "DAPP",
+        } as unknown as ConstructorParameters<
+          typeof Web3Auth
+        >[0]) as Web3AuthInstance;
 
-        setWeb3auth(w3a);
-        await w3a.init();
-        setIsInitialized(true);
+        await instance.init();
+        if (cancelled) return;
+
+        setWeb3auth(instance);
+        const restoredProvider = instance.provider || null;
+        if (restoredProvider) {
+          setProvider(restoredProvider);
+          setUserAccount(await resolveAccount(restoredProvider));
+          const info = await instance.getUserInfo?.();
+          setUserEmail(info?.email || null);
+        }
+        markInitialized();
       } catch (error) {
-        console.error('Web3Auth initialization error:', error);
-        setIsInitialized(true);
+        if (cancelled) return;
+        const message = error instanceof Error ? error.message : String(error);
+        setInitializationError(message);
+        console.error("Web3Auth initialization error:", error);
+        markInitialized();
       }
     };
 
-    if (CLIENT_ID) {
-      init();
-    } else {
-      console.warn('NEXT_PUBLIC_WEB3AUTH_CLIENT_ID not set');
-      setIsInitialized(true);
-    }
+    void init();
+
+    const rejectionHandler = (event: PromiseRejectionEvent) => {
+      const reason =
+        event.reason instanceof Error
+          ? event.reason.message
+          : String(event.reason);
+      if (
+        reason.includes("farcaster") ||
+        reason.includes("Invalid auth connection")
+      ) {
+        event.preventDefault();
+      }
+    };
+    window.addEventListener("unhandledrejection", rejectionHandler);
+
+    return () => {
+      cancelled = true;
+      window.removeEventListener("unhandledrejection", rejectionHandler);
+    };
   }, []);
 
   const login = useCallback(async (): Promise<string | null> => {
     if (!web3auth) return null;
 
     try {
-      const connection = await web3auth.connect();
+      const connection =
+        (await web3auth.connect()) as Web3AuthConnection | null;
       if (!connection) return null;
 
-      // Get the EIP-1193 provider from the connection
-      const ethProvider = (connection as any).ethereumProvider || connection;
-
-      // Use BrowserProvider wrapping Web3Auth's provider for signing.
-      // Web3Auth Sapphire (sapphire_devnet) uses ERC-4337 smart accounts,
-      // which don't expose a private key. Instead, we create an ethers-compatible
-      // signer from the Web3Auth EIP-1193 provider.
-      // The chain is configured via EthereumPrivateKeyProvider above.
-      const browserProvider = new BrowserProvider(ethProvider);
-
-      // Get the user's address first
-      const accounts: string[] = await ethProvider.request({ method: 'eth_requestAccounts' });
-      const account = accounts?.[0]?.toLowerCase() || null;
+      const ethProvider = connection.ethereumProvider || connection;
+      const accounts = await ethProvider.request({
+        method: "eth_requestAccounts",
+      });
+      const account =
+        Array.isArray(accounts) && typeof accounts[0] === "string"
+          ? accounts[0].toLowerCase()
+          : null;
       if (!account) return null;
 
-      // Get signer by known address — this skips the eth_accounts call
-      // that would fail with Web3Auth's AA provider
-      const ethersSigner = await browserProvider.getSigner(account);
-      setSigner(ethersSigner);
+      setProvider(ethProvider);
       setUserAccount(account);
 
-      // Get user info
-      try {
-        const userInfo = await (web3auth as any).getUserInfo();
-        if (userInfo?.email) setUserEmail(userInfo.email);
-      } catch {
-        // ignore
-      }
+      const userInfo = await web3auth.getUserInfo?.();
+      setUserEmail(userInfo?.email || null);
 
       return account;
     } catch (error) {
-      console.error('Login error:', error);
+      console.error("Login error:", error);
       return null;
     }
   }, [web3auth]);
@@ -133,26 +199,37 @@ export const Web3AuthProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     if (!web3auth) return;
     try {
       await web3auth.logout();
-      setSigner(null);
+    } finally {
+      setProvider(null);
       setUserAccount(null);
       setUserEmail(null);
-    } catch (error) {
-      console.error('Logout error:', error);
     }
   }, [web3auth]);
 
+  const value = useMemo<Web3AuthContextType>(
+    () => ({
+      isInitialized,
+      isAuthenticated: Boolean(userAccount),
+      initializationError,
+      userAccount,
+      userEmail,
+      provider,
+      login,
+      logout,
+    }),
+    [
+      initializationError,
+      isInitialized,
+      login,
+      logout,
+      provider,
+      userAccount,
+      userEmail,
+    ],
+  );
+
   return (
-    <Web3AuthContext.Provider
-      value={{
-        isInitialized,
-        isAuthenticated: !!userAccount,
-        userAccount,
-        userEmail,
-        signer,
-        login,
-        logout,
-      }}
-    >
+    <Web3AuthContext.Provider value={value}>
       {children}
     </Web3AuthContext.Provider>
   );
@@ -161,7 +238,7 @@ export const Web3AuthProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 export const useWeb3Auth = () => {
   const context = useContext(Web3AuthContext);
   if (context === undefined) {
-    throw new Error('useWeb3Auth must be used within Web3AuthProvider');
+    throw new Error("useWeb3Auth must be used within Web3AuthProvider");
   }
   return context;
 };

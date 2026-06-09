@@ -1,53 +1,72 @@
 /**
  * 1Shot Public Relayer Client
  *
- * A JSON-RPC client for the 1Shot public relayer.
- * Enables gasless (gas-abstracted) EIP-7710 delegated transactions
- * on Arbitrum Sepolia + other EVM chains.
- *
- * The relayer accepts a signed delegation from a 7702StatelessDelegator
- * smart account and redeems it on-chain.
- *
- * Docs: https://relayer.1shotapi.com/relayers
- * Devnet: https://relayer.1shotapi.dev/relayers
+ * JSON-RPC client for 1Shot's gas-abstracted ERC-7710 relayer.
+ * It supports capability discovery, rough fee quotes, estimate-first sends,
+ * status polling, and JSON-safe delegation serialization.
  */
 
-// ── Types ─────────────────────────────────────────────────────────────────
+import { bytesToHex } from "viem/utils";
+
+export type Hex = `0x${string}`;
 
 export interface ChainCapability {
-  feeCollector: string;
-  targetAddress: string;
-  tokens: { address: string; symbol: string; decimals: string }[];
+  feeCollector: Hex;
+  targetAddress: Hex;
+  tokens: {
+    address: Hex;
+    symbol?: string;
+    name?: string;
+    decimals: number | string;
+  }[];
 }
 
-export interface CapabilitiesResponse {
-  [chainId: string]: ChainCapability;
-}
+export type CapabilitiesResponse = Record<string, ChainCapability>;
 
 export interface FeeDataResponse {
-  gasPrice: string;
+  chainId: string;
+  token: { address: Hex; decimals: number; symbol?: string; name?: string };
+  gasPrice: Hex;
   rate: number;
   minFee: string;
   expiry: number;
-  context: string;
+  context?: string;
+  feeCollector: Hex;
+  targetAddress?: Hex;
+}
+
+export interface Execution7710 {
+  target: Hex;
+  value: string;
+  data: Hex;
+}
+
+export interface DelegatedTransaction7710 {
+  permissionContext: unknown[];
+  executions: Execution7710[];
+}
+
+export interface AuthorizationListEntry {
+  address: Hex;
+  chainId: number | string;
+  nonce: number | string;
+  r: Hex;
+  s: Hex;
+  yParity: number | string;
 }
 
 export interface EstimateRequest {
-  chainId: number;
-  transactions: {
-    permissionContext: string[];
-    executions: {
-      to: string;
-      value: string;
-      data: string;
-    }[];
-  }[];
+  chainId: number | string;
+  transactions: DelegatedTransaction7710[];
+  authorizationList?: AuthorizationListEntry[];
   destinationUrl?: string;
   memo?: string;
 }
 
 export interface EstimateResponse {
   success: boolean;
+  paymentTokenAddress?: Hex;
+  paymentChain?: number;
   requiredPaymentAmount?: string;
   gasUsed?: Record<string, string>;
   context?: string;
@@ -55,230 +74,150 @@ export interface EstimateResponse {
   error?: string;
 }
 
-export interface SendRequest {
-  chainId: number;
-  transactions: {
-    permissionContext: string[];
-    executions: {
-      to: string;
-      value: string;
-      data: string;
-    }[];
-  }[];
+export interface SendRequest extends EstimateRequest {
   context: string;
-  destinationUrl?: string;
-  memo?: string;
-  authorizationList?: {
-    address: string;
-    nonce: string;
-  }[];
+  taskId?: Hex;
 }
 
-export type TaskId = string;
+export type TaskId = Hex;
 
 export interface StatusResponse {
   status: number;
   label: string;
-  hash?: string;
-  receipt?: any;
+  hash?: Hex;
+  receipt?: unknown;
   message?: string;
-  data?: any;
+  data?: unknown;
   memo?: string;
 }
 
-// ── Configuration ─────────────────────────────────────────────────────────
+type JsonRpcResponse<T> =
+  | { jsonrpc: "2.0"; id: number | string; result: T }
+  | {
+      jsonrpc: "2.0";
+      id: number | string;
+      error: { code: number; message: string; data?: unknown };
+    };
 
-const RELAYER_URLS: Record<number, string> = {
-  421614: "https://relayer.1shotapi.dev/relayers",   // Arbitrum Sepolia (devnet)
-  11155111: "https://relayer.1shotapi.dev/relayers", // Sepolia (devnet)
-  84532: "https://relayer.1shotapi.dev/relayers",    // Base Sepolia (devnet)
-  // Mainnets - uncomment for production
-  // 1: "https://relayer.1shotapi.com/relayers",
-  // 137: "https://relayer.1shotapi.com/relayers",
-  // 42161: "https://relayer.1shotapi.com/relayers",
-  // 8453: "https://relayer.1shotapi.com/relayers",
-};
+const DEVNET_RELAYER_URL = "https://relayer.1shotapi.dev/relayers";
+const MAINNET_RELAYER_URL = "https://relayer.1shotapi.com/relayers";
 
-export function getRelayerUrl(chainId: number): string {
-  const url = RELAYER_URLS[chainId];
-  if (!url) {
-    throw new Error(`No relayer URL configured for chain ID ${chainId}`);
-  }
-  return url;
+const DEVNET_CHAIN_IDS = new Set([11155111, 84532, 421614]);
+
+export function getRelayerUrl(chainId: number | string): string {
+  const id = Number(chainId);
+  return DEVNET_CHAIN_IDS.has(id) ? DEVNET_RELAYER_URL : MAINNET_RELAYER_URL;
 }
 
-// ── JSON-RPC Helper ──────────────────────────────────────────────────────
+export function toRelayerJson(value: unknown): unknown {
+  if (value === null || value === undefined) return value;
+  if (typeof value === "bigint") return `0x${value.toString(16)}`;
+  if (value instanceof Uint8Array) return bytesToHex(value);
+  if (Array.isArray(value)) return value.map(toRelayerJson);
+  if (typeof value === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [key, nested] of Object.entries(value))
+      out[key] = toRelayerJson(nested);
+    return out;
+  }
+  return value;
+}
 
 async function rpcCall<T>(
-  chainId: number,
+  chainId: number | string,
   method: string,
-  params: any
+  params: unknown,
 ): Promise<T> {
-  const url = getRelayerUrl(chainId);
-
-  const response = await fetch(url, {
+  const response = await fetch(getRelayerUrl(chainId), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       jsonrpc: "2.0",
       id: 1,
       method,
-      params,
+      params: toRelayerJson(params),
     }),
   });
 
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(`Relayer RPC error (${response.status}): ${text}`);
-  }
-
-  const json = await response.json();
-  if (json.error) {
+  const json = (await response.json()) as JsonRpcResponse<T>;
+  if (!response.ok)
+    throw new Error(
+      `Relayer RPC HTTP ${response.status}: ${JSON.stringify(json)}`,
+    );
+  if ("error" in json) {
     throw new Error(`Relayer error ${json.error.code}: ${json.error.message}`);
   }
 
-  return json.result as T;
+  return json.result;
 }
 
-// ── Relayer API ───────────────────────────────────────────────────────────
-
-/**
- * Step 1: Discover capabilities for one or more chains.
- *
- * Returns: feeCollector, targetAddress, and accepted tokens per chain.
- * The targetAddress is what you must delegate TO when signing.
- */
 export async function getCapabilities(
-  chainIds: number[]
+  chainIds: Array<number | string>,
 ): Promise<CapabilitiesResponse> {
-  // Use the first chain's URL for capabilities discovery
-  const result = await rpcCall<CapabilitiesResponse>(
+  if (chainIds.length === 0)
+    throw new Error("At least one chain ID is required");
+  return rpcCall<CapabilitiesResponse>(
     chainIds[0],
     "relayer_getCapabilities",
-    chainIds.map(String)
+    chainIds.map(String),
   );
-  return result;
 }
 
-/**
- * Step 2b (fallback): Get rough fee data before the bundle exists.
- * Returns gasPrice, rate, minFee, and a signed price-lock context.
- */
 export async function getFeeData(
-  chainId: number,
-  paymentTokenAddress: string
+  chainId: number | string,
+  paymentTokenAddress: string,
 ): Promise<FeeDataResponse> {
-  return rpcCall<FeeDataResponse>(chainId, "relayer_getFeeData", [
-    String(chainId),
-    paymentTokenAddress,
-  ]);
-}
-
-/**
- * Step 3: Estimate the fee for a transaction bundle.
- * Send the same params shape as send (without context).
- * Returns requiredPaymentAmount and a signed price-lock context.
- */
-export async function estimateTransaction(
-  chainId: number,
-  params: Omit<SendRequest, "context">
-): Promise<EstimateResponse> {
-  return rpcCall<EstimateResponse>(chainId, "relayer_estimate7710Transaction", {
-    chainId: params.chainId,
-    transactions: params.transactions,
-    memo: params.memo,
+  return rpcCall<FeeDataResponse>(chainId, "relayer_getFeeData", {
+    chainId: String(chainId),
+    token: paymentTokenAddress,
   });
 }
 
-/**
- * Step 4: Submit a transaction bundle via the relayer.
- * Must include the context from estimateTransaction.
- * Returns a TaskId for status polling.
- */
-export async function sendTransaction(
-  chainId: number,
-  params: SendRequest
-): Promise<TaskId> {
-  return rpcCall<TaskId>(chainId, "relayer_send7710Transaction", params);
+export async function estimateTransaction(
+  chainId: number | string,
+  params: EstimateRequest,
+): Promise<EstimateResponse> {
+  return rpcCall<EstimateResponse>(chainId, "relayer_estimate7710Transaction", {
+    ...params,
+    chainId: String(params.chainId),
+  });
 }
 
-/**
- * Step 5: Check transaction status.
- * Pass logs: true to include transaction logs.
- */
+export async function sendTransaction(
+  chainId: number | string,
+  params: SendRequest,
+): Promise<TaskId> {
+  return rpcCall<TaskId>(chainId, "relayer_send7710Transaction", {
+    ...params,
+    chainId: String(params.chainId),
+  });
+}
+
 export async function getStatus(
   taskId: string,
-  logs: boolean = false
+  logs = false,
+  chainId: number | string = 421614,
 ): Promise<StatusResponse> {
-  // Use Arbitrum Sepolia as default chain for status checks
-  return rpcCall<StatusResponse>(421614, "relayer_getStatus", {
+  return rpcCall<StatusResponse>(chainId, "relayer_getStatus", {
     id: taskId,
     logs,
   });
 }
 
-/**
- * Poll status until terminal.
- */
 export async function waitForCompletion(
   taskId: string,
-  pollIntervalMs: number = 3000,
-  maxAttempts: number = 30
+  pollIntervalMs = 3000,
+  maxAttempts = 30,
+  chainId: number | string = 421614,
 ): Promise<StatusResponse> {
-  for (let i = 0; i < maxAttempts; i++) {
-    const status = await getStatus(taskId, true);
-    if (status.status >= 200) {
-      return status;
-    }
+  for (let i = 0; i < maxAttempts; i += 1) {
+    const status = await getStatus(taskId, true, chainId);
+    if (status.status >= 200) return status;
     await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
   }
-  throw new Error(`Timeout waiting for task ${taskId}`);
+  throw new Error(`Timeout waiting for relayer task ${taskId}`);
 }
 
-// ── Webhook Verification ─────────────────────────────────────────────────
-
-let cachedJwks: any = null;
-let jwksFetchedAt = 0;
-
-/**
- * Fetch and cache the relayer's JWKS for webhook verification.
- */
-export async function getJwks(): Promise<any> {
-  const now = Date.now();
-  if (cachedJwks && now - jwksFetchedAt < 3600000) {
-    return cachedJwks;
-  }
-
-  const res = await fetch(
-    "https://relayer.1shotapi.com/.well-known/jwks.json"
-  );
-  const jwks = await res.json();
-  cachedJwks = jwks;
-  jwksFetchedAt = now;
-  return jwks;
-}
-
-/**
- * Verify a relayer webhook body using Ed25519.
- * The relayer signs the canonical JSON (sorted keys) with Ed25519.
- *
- * @param body - The parsed webhook JSON body (with signature field)
- * @returns boolean
- */
-export async function verifyWebhookSignature(body: any): Promise<boolean> {
-  try {
-    const jwks = await getJwks();
-    const signature = body.signature;
-    if (!signature) return false;
-
-    // Find the key by keyId
-    const key = jwks.keys?.find((k: any) => k.kid === body.keyId);
-    if (!key || key.kty !== "OKP" || key.crv !== "Ed25519") return false;
-
-    // In production, use @noble/ed25519 here
-    // For now, we trust the relayer's webhook (it's verified at the app level)
-    return true;
-  } catch {
-    return false;
-  }
+export function relayerWebhookJwksUrl(chainId: number | string): string {
+  return `${getRelayerUrl(chainId).replace(/\/relayers$/, "")}/.well-known/jwks.json`;
 }
